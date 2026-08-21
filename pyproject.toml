@@ -1,0 +1,17 @@
+[project]
+name = "qwen38-27b-8x4090-sglang"
+version = "0.1.0"
+description = "Native uv deployment for Qwen3.8-27B FP8 on 8x RTX 4090 with dual TP4 SGLang replicas"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "modelscope>=1.30",
+  "sglang @ git+https://github.com/sgl-project/sglang.git@0e4a09480#subdirectory=python",
+]
+
+[tool.uv]
+link-mode = "copy"
+
+[[tool.uv.index]]
+name = "aliyun"
+url = "https://mirrors.aliyun.com/pypi/simple"
+default = true

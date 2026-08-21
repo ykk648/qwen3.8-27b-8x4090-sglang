@@ -1,0 +1,4 @@
+{"run": 1, "ttft_s": 1.6952167730778456, "elapsed_s": 9.733626943081617, "completion_tokens": 512.0, "output_tps": 63.694186931463804}
+{"run": 2, "ttft_s": 0.11348944716155529, "elapsed_s": 7.044756297953427, "completion_tokens": 512.0, "output_tps": 73.8681702813831}
+{"run": 3, "ttft_s": 0.11214177310466766, "elapsed_s": 7.049530608113855, "completion_tokens": 512.0, "output_tps": 73.80298440476876}
+{"runs": 3, "median_ttft_s": 0.11348944716155529, "median_output_tps": 73.80298440476876, "mean_output_tps": 70.45511387253856}
