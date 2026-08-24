@@ -47,6 +47,7 @@ radix cache 命中后 TTFT 为 0.472s、decode 为 55.83 tok/s。
 
 对刚使用过的约 61K 历史，radix cache 命中后 TTFT 为 **0.472s**、decode 为
 **55.83 tok/s**。完整验收记录见 [docs/EXPERIMENTS.zh-CN.md](docs/EXPERIMENTS.zh-CN.md)。
+接近 256K 的冷历史实测仅 7.31 tok/s，因此不将 256K 设为 Codex 默认窗口。
 
 ## 环境要求
 
