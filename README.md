@@ -32,14 +32,11 @@ GPU 0,1,2,3,4,5,6,7 ── TP8 + EP2 ── :8001 ── 128K context
 
 测试机器没有 NVLink，并且 8 张卡分布在两组 PCIe/NUMA 域中。
 
-| 配置 | 热 TTFT | 短请求输出速度 |
+| 配置 | 约 61K 上下文 | 约 112K 上下文 |
 |---|---:|---:|
-| MTP 基线，约 61K 实际上下文 | 36.82 s | 26.92 tok/s |
-| MTP 基线，约 112K 实际上下文 | 67.24 s | 15.73 tok/s |
-| DFlash2（4 卡 TP4+EP1），约 61K 实际上下文 | 34.38 s | 56.97 tok/s |
-| DFlash2（4 卡 TP4+EP1），约 112K 实际上下文 | 32.38 s | 30.27 tok/s |
-| DFlash2，约 61K 实际上下文 | 35.70 s | **57.54 tok/s** |
-| DFlash2，约 112K 实际上下文 | 31.26 s | **34.22 tok/s** |
+| MTP 基线 | 26.92 tok/s | 15.73 tok/s |
+| DFlash2（4 卡 TP4+EP1） | 56.97 tok/s | 30.27 tok/s |
+| DFlash2（8 卡 TP8+EP2，最终） | **57.54 tok/s** | **34.22 tok/s** |
 
 短请求的高 decode 速度不能代表 Codex 的长会话体验。当前默认将全部 8 张卡用于
 单路 128K 服务，并以 DFlash2 提升真实长上下文 decode。对刚使用过的 61K 历史，
@@ -48,14 +45,8 @@ radix cache 命中后 TTFT 为 0.472s、decode 为 55.83 tok/s。
 4 卡 DFlash2 在约 61K 时几乎追平 8 卡，但约 112K 时 8 卡快约 13%，因此默认保留
 8 卡给 Codex 长会话。
 
-256K 不是仅验证启动：真实的 258,000-token prompt 加 32-token 输出成功完成。
-
-| Prompt | Output | 总耗时 | Prefill 吞吐 |
-|---:|---:|---:|---:|
-| 258,000 tokens | 32 tokens | 187.08 s | 1,379.12 tok/s |
-
-短请求的 139.16 tok/s 是 decode 速度；接近 256K 的首次 prefill 约需三分钟，两者
-不能混为同一个指标。完整实验记录见 [docs/EXPERIMENTS.zh-CN.md](docs/EXPERIMENTS.zh-CN.md)。
+对刚使用过的约 61K 历史，radix cache 命中后 TTFT 为 **0.472s**、decode 为
+**55.83 tok/s**。完整验收记录见 [docs/EXPERIMENTS.zh-CN.md](docs/EXPERIMENTS.zh-CN.md)。
 
 ## 环境要求
 
@@ -257,8 +248,8 @@ DFLASH_DRAFT_KV_CACHE_DTYPE=fp8_e4m3
 DFLASH_DRAFT_WINDOW_SIZE=2048
 ```
 
-256K 双路配置仍记录在实验文档中，但不再是默认方案：真实长上下文的 decode 会随着
-实际序列长度明显下降。128K 单路配置为缓存保留了更多显存，并以较低的多轮等待为目标。
+旧的 256K 双路与 MTP 方案仅保留为历史实验；当前默认配置以 Codex 长会话的实际响应速度为
+目标。
 
 ## 已知限制
 
