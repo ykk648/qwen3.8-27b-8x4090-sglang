@@ -84,6 +84,10 @@ cd qwen3.8-27b-8x4090-sglang
 SGLang 固定到已验证的 Git commit。安装时设置 `SGLANG_BUILD_RUST_EXTS=none`，因此
 不要求额外安装 Rust/Cargo。
 
+安装脚本还会为固定的 SGLang commit 应用一个小型 Responses API 兼容补丁，使 Codex
+code mode 的 `custom_tool_call` 和 `custom_tool_call_output` 能保留为 Qwen 可理解的
+工具历史。上游 SGLang main 在本项目发布时尚未原生支持这两种输入项。
+
 ### 2. 下载官方 FP8 模型
 
 ```bash

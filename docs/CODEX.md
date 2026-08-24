@@ -58,6 +58,11 @@ codex exec \
 成功时，Codex 应产生结构化 command execution，而不是在最终文本中打印
 `<tool_call>` XML。
 
+Codex code mode 会在后续请求中发送 `custom_tool_call` 和
+`custom_tool_call_output`。固定的 SGLang commit 尚不识别这两种 Responses 输入项，
+因此 `install.sh` 会自动应用兼容补丁，将它们转换为 Qwen chat template 可重放的工具
+历史。每次重新执行 `./install.sh` 后，补丁都会自动检查并在需要时重新应用。
+
 ## 4. 为什么使用 240K 自动压缩阈值
 
 262,144 是模型上下文总窗口，不等于可以把 262,144 tokens 全部用于历史消息。

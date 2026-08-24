@@ -23,5 +23,6 @@ cd "$ROOT"
 SGLANG_BUILD_RUST_EXTS=none \
   UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple \
   "$UV_BIN" sync --python 3.12
+"$ROOT/.venv/bin/python" "$ROOT/tools/patch_sglang_custom_tool_calls.py"
 
 echo "Environment ready: $ROOT/.venv"
