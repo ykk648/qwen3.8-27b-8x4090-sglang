@@ -20,13 +20,25 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 speculative_args=()
 capacity_args=()
+cache_args=()
 ssm_dtype=bfloat16
 
 if [[ -n "${MAX_TOTAL_TOKENS:-}" ]]; then
   capacity_args+=(--max-total-tokens "$MAX_TOTAL_TOKENS")
 fi
+if [[ "${DISABLE_RADIX_CACHE:-1}" == "1" ]]; then
+  cache_args+=(--disable-radix-cache)
+fi
 
-if [[ "${ENABLE_MTP:-0}" == "1" ]]; then
+if [[ "${SPECULATIVE_ALGORITHM:-}" == "DFLASH" ]]; then
+  speculative_args=(
+    --speculative-algorithm DFLASH
+    --speculative-draft-model-path "${DFLASH_DRAFT_MODEL_PATH:?Set DFLASH_DRAFT_MODEL_PATH when SPECULATIVE_ALGORITHM=DFLASH}"
+    --speculative-num-draft-tokens "${DFLASH_BLOCK_SIZE:-8}"
+    --speculative-draft-kv-cache-dtype "${DFLASH_DRAFT_KV_CACHE_DTYPE:-fp8_e4m3}"
+    --speculative-draft-window-size "${DFLASH_DRAFT_WINDOW_SIZE:-2048}"
+  )
+elif [[ "${ENABLE_MTP:-0}" == "1" ]]; then
   ssm_dtype=float32
   speculative_args=(
     --speculative-algorithm EAGLE
@@ -49,19 +61,20 @@ exec "$ROOT/.venv/bin/python" -m sglang.launch_server \
   --api-key "$QWEN_API_KEY" \
   --tp-size "${TP_SIZE:-4}" \
   --ep-size "${EP_SIZE:-1}" \
+  --dcp-size "${DCP_SIZE:-1}" \
   --context-length "${CONTEXT_LENGTH:-262144}" \
   --mem-fraction-static "${MEM_FRACTION_STATIC:-0.85}" \
   --max-running-requests "${MAX_RUNNING_REQUESTS:-1}" \
-  --max-mamba-cache-size 1 \
+  --max-mamba-cache-size "${MAX_MAMBA_CACHE_SIZE:-1}" \
   --chunked-prefill-size "${CHUNKED_PREFILL_SIZE:-8192}" \
   --disable-prefill-cuda-graph \
   --attention-backend triton \
   --quantization fp8 \
   --mamba-ssm-dtype "$ssm_dtype" \
-  --disable-radix-cache \
   --triton-attention-reduce-in-fp32 \
   --trust-remote-code \
   --reasoning-parser "${REASONING_PARSER:-qwen3}" \
   --tool-call-parser "${TOOL_CALL_PARSER:-qwen3_coder}" \
   "${capacity_args[@]}" \
+  "${cache_args[@]}" \
   "${speculative_args[@]}"

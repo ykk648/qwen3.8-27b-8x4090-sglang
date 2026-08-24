@@ -1,31 +1,29 @@
 # Qwen3.8-27B FP8 on 8× RTX 4090
 
-在 8 张 RTX 4090 24GB 上，使用原生 `uv` 环境和 SGLang 部署两路独立的
-Qwen3.8-27B FP8 服务。每路使用 4 张 GPU、支持 256K 上下文、MTP speculative
-decoding、OpenAI Responses API 和 Codex 工具调用。
+在 8 张 RTX 4090 24GB 上，使用原生 `uv` 环境和 SGLang 部署单路
+Qwen3.8-27B FP8 服务。服务使用全部 8 张 GPU、128K 上下文、DFlash2 speculative
+decoding、前缀缓存、OpenAI Responses API 和 Codex 工具调用。
 
-> Native `uv` deployment of Qwen3.8-27B FP8 on 8× RTX 4090. Two independent
-> TP4 SGLang replicas, 256K context per replica, MTP acceleration, OpenAI
-> Responses API, and Codex tool calling. No Docker or systemd required.
+> Native `uv` deployment of Qwen3.8-27B FP8 on 8× RTX 4090. One TP8+EP2
+> SGLang service with a 128K context window, DFlash2 acceleration, prefix caching,
+> OpenAI Responses API, and Codex tool calling. No Docker or systemd required.
 
 ## 最终架构
 
 ```text
-GPU 0,1,2,3 ── TP4 replica A ── :8000 ── 256K context
-GPU 4,5,6,7 ── TP4 replica B ── :8001 ── 256K context
+GPU 0,1,2,3,4,5,6,7 ── TP8 + EP2 ── :8001 ── 128K context
 ```
 
-两路服务共享同一份模型文件，但拥有独立进程、CUDA context、KV cache 和端口。
-默认使用相同 API Key，也可以手动设置为不同密钥。
+服务使用单一进程、CUDA context 和端口；API Key 保存在忽略的 `.env.8001` 中。
 
 | 项目 | 配置 |
 |---|---|
 | GPU | 8× RTX 4090 24GB |
 | 模型 | 官方 Qwen3.8-27B-FP8，约 29GB |
-| 服务数量 | 2 |
-| 每路并行方式 | TP4 + EP1 |
-| 每路上下文 | 262,144 tokens |
-| 推理加速 | MTP + speculative decode CUDA graph |
+| 服务数量 | 1 |
+| 并行方式 | TP8 + EP2 |
+| 上下文 | 131,072 tokens |
+| 推理加速 | DFlash2 + speculative verify CUDA graph + radix cache |
 | API | Completions、Chat Completions、Responses |
 | 运行环境 | Python 3.12 + uv |
 | 容器/系统服务 | 不需要 |
@@ -36,11 +34,14 @@ GPU 4,5,6,7 ── TP4 replica B ── :8001 ── 256K context
 
 | 配置 | 热 TTFT | 短请求输出速度 |
 |---|---:|---:|
-| SGLang main，TP4 + MTP | 0.204 s | **139.16 tok/s** |
-| SGLang main，TP8 + MTP | 0.203 s | 135.53 tok/s |
+| MTP 基线，约 61K 实际上下文 | 36.82 s | 26.92 tok/s |
+| MTP 基线，约 112K 实际上下文 | 67.24 s | 15.73 tok/s |
+| DFlash2，约 61K 实际上下文 | 35.70 s | **57.54 tok/s** |
+| DFlash2，约 112K 实际上下文 | 31.26 s | **34.22 tok/s** |
 
-TP4 在单用户、并发 1 的测试中比 TP8 快约 2.6%，因此最终把 8 张 GPU 拆成两路
-TP4，而不是启动一路 TP8。
+短请求的高 decode 速度不能代表 Codex 的长会话体验。当前默认将全部 8 张卡用于
+单路 128K 服务，并以 DFlash2 提升真实长上下文 decode。对刚使用过的 61K 历史，
+radix cache 命中后 TTFT 为 0.472s、decode 为 55.83 tok/s。
 
 256K 不是仅验证启动：真实的 258,000-token prompt 加 32-token 输出成功完成。
 
@@ -88,7 +89,7 @@ SGLang 固定到已验证的 Git commit。安装时设置 `SGLANG_BUILD_RUST_EXT
 code mode 的 `custom_tool_call` 和 `custom_tool_call_output` 能保留为 Qwen 可理解的
 工具历史。上游 SGLang main 在本项目发布时尚未原生支持这两种输入项。
 
-### 2. 下载官方 FP8 模型
+### 2. 下载官方 FP8 模型和 DFlash2 草稿模型
 
 ```bash
 ./download-model.sh
@@ -108,7 +109,7 @@ Qwen/Qwen3.8-27B-FP8
 
 也可以复用已有模型目录，不执行下载。
 
-### 3. 生成双路配置
+### 3. 生成单路 8 卡配置
 
 使用默认模型目录：
 
@@ -122,15 +123,10 @@ Qwen/Qwen3.8-27B-FP8
 ./configure.sh /data/models/Qwen3.8-27B-FP8
 ```
 
-脚本会生成：
+脚本会生成 `.env.8001`：GPU 0–7、`TP8 + EP2`、端口 8001、128K 上下文。该文件
+被 `.gitignore` 排除，并保存自动生成的随机 API Key。不要把它提交到 Git 或发送到公开聊天中。
 
-- `.env.8000`：GPU 0–3，端口 8000
-- `.env.8001`：GPU 4–7，端口 8001
-
-两个文件均被 `.gitignore` 排除，并保存自动生成的随机 API Key。不要把它们提交到
-Git 或发送到公开聊天中。
-
-如果机器的 PCIe/NUMA 拓扑不同，请修改两个文件中的 `CUDA_VISIBLE_DEVICES`。可以用
+如果机器的 PCIe/NUMA 拓扑不同，请修改 `.env.8001` 中的 `CUDA_VISIBLE_DEVICES`。可以用
 以下命令查看拓扑：
 
 ```bash
@@ -139,17 +135,10 @@ nvidia-smi topo -m
 
 ### 4. 启动服务
 
-启动两路：
+启动默认单路服务：
 
 ```bash
 ./start-all.sh
-```
-
-只启动一路：
-
-```bash
-./start-instance.sh 8000
-./start-instance.sh 8001
 ```
 
 这只是普通的 `nohup` 命令行进程，不会安装 systemd 服务。
@@ -157,9 +146,8 @@ nvidia-smi topo -m
 ### 5. 等待并检查服务
 
 ```bash
-tail -f logs/sglang-8000.log
+tail -f logs/sglang-8001.log
 ./status.sh
-./healthcheck.sh 8000
 ./healthcheck.sh 8001
 ```
 
@@ -168,7 +156,6 @@ tail -f logs/sglang-8000.log
 ### 6. 测试 Responses API
 
 ```bash
-./test-responses.py --instance 8000
 ./test-responses.py --instance 8001
 ```
 
@@ -247,26 +234,34 @@ model_auto_compact_token_limit = 240000
 测试脚本使用固定 prompt、`temperature=0`、流式返回和并发 1，并从首 token 后计算
 decode tok/s。不同 prompt、采样参数、输出长度和计时口径不能直接横向比较。
 
-## 关键 256K 参数
+## 当前 128K + DFlash2 参数
 
 ```text
-CONTEXT_LENGTH=262144
-MAX_TOTAL_TOKENS=300000
+TP_SIZE=8
+EP_SIZE=2
+CONTEXT_LENGTH=131072
+MAX_TOTAL_TOKENS=150000
 CHUNKED_PREFILL_SIZE=8192
-MEM_FRACTION_STATIC=0.85
+MEM_FRACTION_STATIC=0.90
 MAX_RUNNING_REQUESTS=1
+DISABLE_RADIX_CACHE=0
+MAX_MAMBA_CACHE_SIZE=5
+SPECULATIVE_ALGORITHM=DFLASH
+DFLASH_BLOCK_SIZE=8
+DFLASH_DRAFT_KV_CACHE_DTYPE=fp8_e4m3
+DFLASH_DRAFT_WINDOW_SIZE=2048
 ```
 
-第一次实验让 SGLang 自动创建约 781K token pool，并使用 32768 的 prefill chunk，
-服务可以启动，但真实 258K prefill 因缺少额外 workspace 而 OOM。限制 token pool、
-降低 chunk size 和静态显存比例后，258K 请求稳定完成。
+256K 双路配置仍记录在实验文档中，但不再是默认方案：真实长上下文的 decode 会随着
+实际序列长度明显下降。128K 单路配置为缓存保留了更多显存，并以较低的多轮等待为目标。
 
 ## 已知限制
 
 - 为单用户、低并发、单流 decode 优化，不是高并发网关配置。
 - `MAX_RUNNING_REQUESTS=1` 会限制每路并发。
-- 为适配 24GB 卡，关闭了 prefill CUDA graph，但保留 MTP decode CUDA graph。
-- 默认关闭 radix cache，避免长上下文缓存占用额外显存。
+- 为适配 24GB 卡，关闭了 prefill CUDA graph，保留 DFlash2 target/draft verify CUDA graph。
+- 默认开启 radix cache。DFlash2 下连续的约 61K 历史命中 60,928 个 token，TTFT 为
+  0.472s；它复用未变化的历史前缀，DFlash2 则负责提高长上下文的逐 token decode。
 - 4090 没有 NVLink；GPU 分组应根据实际 PCIe/NUMA 拓扑调整。
 - SGLang 使用开发 commit，未来升级前应重新跑 256K 和 Codex 工具调用测试。
 

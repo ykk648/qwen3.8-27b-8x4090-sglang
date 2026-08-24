@@ -2,5 +2,4 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-"$ROOT/start-instance.sh" 8000
 "$ROOT/start-instance.sh" 8001

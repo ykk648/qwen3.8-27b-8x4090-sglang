@@ -141,14 +141,14 @@ SGLang main 暴露 `/v1/responses`，但必须启用：
 后，真实 Codex CLI 测试成功产生结构化 command execution、执行 shell 命令并把结果
 返回模型，证明 Responses 流式事件和工具调用闭环可用。
 
-## 最终方案
+## 历史方案：256K 双路 TP4
 
 ```text
 Replica A: GPU 0-3, TP4, port 8000, 256K
 Replica B: GPU 4-7, TP4, port 8001, 256K
 ```
 
-最终选择双路 TP4 的原因：
+当时选择双路 TP4 的原因：
 
 1. 单流速度略高于 TP8。
 2. 避免跨两组 PCIe/NUMA 域的通信。
@@ -162,3 +162,68 @@ Replica B: GPU 4-7, TP4, port 8001, 256K
 - 256K 必须通过真实长 prompt 验证，不能只看启动日志。
 - 上下文容量、KV 精度和速度之间存在明确取舍。
 - 自定义 runtime 补丁可以更快，但维护成本和模型一致性也必须计入选择。
+
+## 当前部署：128K 单路 8 卡 + DFlash2（2026-08-24）
+
+Codex 的真实长会话暴露出一个此前短请求基准没有反映的问题：随着实际历史变长，逐 token
+输出速度会持续下降。256K 表示容量可达，不代表 128K 以上仍有可交互的 decode 速度。
+
+当前生产配置改为单路 `:8001`，使用全部 8 张 GPU：
+
+```text
+TP_SIZE=8
+EP_SIZE=2
+CONTEXT_LENGTH=131072
+MAX_TOTAL_TOKENS=150000
+MEM_FRACTION_STATIC=0.90
+MAX_RUNNING_REQUESTS=1
+DISABLE_RADIX_CACHE=0
+MAX_MAMBA_CACHE_SIZE=5
+```
+
+官方 FP8-MoE 权重不能使用 `TP8 + EP1`：expert 的分块尺寸不满足 FP8 block 对齐。可用的
+8 卡拓扑是 `TP8 + EP2`，使每个 expert 的有效 TP 分片保持为 4。
+
+### MTP 基线：真实长上下文 decode
+
+固定输出 256 tokens、并发 1、MTP3 和 decode CUDA graph 开启：
+
+| 实际 prompt tokens | TTFT | Decode 吞吐 |
+|---:|---:|---:|
+| 约 60,958 | 36.82 s | 26.92 tok/s |
+| 约 111,528 | 67.24 s | 15.73 tok/s |
+
+这说明 8 卡单路解决的是容量与缓存空间，不是长上下文 attention 的线性加速；无 NVLink 的
+PCIe 通信也限制了 TP8 的收益。MTP 日志中的接受长度为 3.92–4.00、接受率 0.97–1.00，已
+接近 MTP3 上限，因此继续增加同一模型的 MTP 参数预期收益很小。
+
+### DFlash2：当前 Codex 优化方案
+
+`z-lab/Qwen3.8-27B-DFlash2` 是 Qwen3.8-27B 的 5 层 block-diffusion 草稿模型，不是
+独立聊天模型。它以 8-token verify block、2048-token 草稿滑动窗口和 FP8 草稿 KV 运行。
+服务仍为 TP8 + EP2、128K、并发 1，MTP 不与 DFlash2 同时启用。
+
+与 MTP 使用相同的固定输出 256 tokens 口径：
+
+| 实际 prompt tokens | MTP decode | DFlash2 decode | DFlash2 TTFT |
+|---:|---:|---:|---:|
+| 约 60,958 | 26.92 tok/s | **57.54 tok/s** | 35.70 s |
+| 约 111,528 | 15.73 tok/s | **34.22 tok/s** | 31.26 s |
+
+在 112K 上下文，DFlash2 比 MTP 快 2.18 倍。日志的 DFlash2 接受长度为 7.25/8、接受率
+0.89；这是真实 decode 加速，而不是只减少 prefill。
+
+### 前缀缓存
+
+启用 radix cache 并将 `MAX_MAMBA_CACHE_SIZE` 设为 5 后，服务可以稳定启动。对完全相同的
+65,536-token 历史连续请求两次：
+
+| 请求 | TTFT | Decode 吞吐 |
+|---|---:|---:|
+| 冷请求 | 38.55 s | 25.71 tok/s |
+| 缓存命中 | 5.40 s | 25.70 tok/s |
+
+MTP 下缓存的冷/热对比表明缓存机制可用。DFlash2 下，先后插入一个 112K 压测会挤掉较小的
+61K 前缀；但对紧接着重复的 61K 历史，缓存命中 60,928 tokens，TTFT 为 **0.472s**，decode
+为 **55.83 tok/s**。这就是 Codex 连续会话的目标场景：缓存负责消除重复历史 prefill，
+DFlash2 负责提高活跃长上下文的生成速度。
